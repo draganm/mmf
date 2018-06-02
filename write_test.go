@@ -15,6 +15,10 @@ var _ = Describe("Write", func() {
 		f, e = mmf.Open(fileName)
 	})
 
+	AfterEach(func() {
+		Expect(f.Close()).To(Succeed())
+	})
+
 	JustBeforeEach(func() {
 		e = f.Append([]byte{4, 5, 6})
 	})

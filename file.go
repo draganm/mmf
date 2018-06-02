@@ -78,3 +78,24 @@ func (f *File) Append(data []byte) error {
 	return err
 
 }
+
+// Close closes unmmaps and closes the file
+func (f *File) Close() error {
+
+	if len(f.MMap) > 0 {
+		err := f.MMap.UnsafeUnmap()
+		if err != nil {
+			return err
+		}
+	}
+
+	err := f.f.Close()
+	if err != nil {
+		return err
+	}
+
+	f.f = nil
+	f.MMap = nil
+
+	return nil
+}

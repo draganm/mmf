@@ -15,6 +15,10 @@ var _ = Describe("Open", func() {
 		f, e = mmf.Open(fileName)
 	})
 
+	AfterEach(func() {
+		Expect(f.Close()).To(Succeed())
+	})
+
 	Context("When the file does not exist", func() {
 
 		It("should not return an error", func() {
