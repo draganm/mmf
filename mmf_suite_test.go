@@ -33,19 +33,19 @@ var _ = AfterEach(func() {
 })
 
 var _ = Describe("Open", func() {
-	var err error
+	var e error
 	var f *mmf.File
 	JustBeforeEach(func() {
-		f, err = mmf.Open(fileName)
+		f, e = mmf.Open(fileName)
 	})
 
 	Context("When the file does not exist", func() {
 
 		It("should not return an error", func() {
-			Expect(err).ToNot(HaveOccurred())
+			Expect(e).ToNot(HaveOccurred())
 		})
 
-		It("Should return a non nil file", func() {
+		It("Should return a non-nil file", func() {
 			Expect(f).ToNot(BeNil())
 		})
 
@@ -57,4 +57,51 @@ var _ = Describe("Open", func() {
 		})
 
 	})
+
+	Context("When the file exists and is empty", func() {
+
+		BeforeEach(func() {
+			f, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0700)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(f.Close()).To(Succeed())
+		})
+
+		It("should not return an error", func() {
+			Expect(e).ToNot(HaveOccurred())
+		})
+
+		It("Should return a non-nil file", func() {
+			Expect(f).ToNot(BeNil())
+		})
+
+		It("Should have size 0 mmap", func() {
+			Expect(len(f.MMap)).To(Equal(0))
+		})
+
+	})
+
+	Context("When the file exists and has some data", func() {
+
+		BeforeEach(func() {
+			f, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0700)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = f.Write([]byte{1, 2, 3})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(f.Close()).To(Succeed())
+		})
+
+		It("should not return an error", func() {
+			Expect(e).ToNot(HaveOccurred())
+		})
+
+		It("Should return a non-nil file", func() {
+			Expect(f).ToNot(BeNil())
+		})
+
+		It("Should mmap the file's data", func() {
+			Expect([]byte(f.MMap)).To(Equal([]byte{1, 2, 3}))
+		})
+
+	})
+
 })
