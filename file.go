@@ -99,3 +99,22 @@ func (f *File) Close() error {
 
 	return nil
 }
+
+func (f *File) Empty() error {
+	if len(f.MMap) == 0 {
+		return nil
+	}
+
+	err := f.MMap.UnsafeUnmap()
+	if err != nil {
+		return err
+	}
+
+	err = f.f.Truncate(0)
+	if err != nil {
+		return err
+	}
+
+	f.MMap = nil
+	return nil
+}
