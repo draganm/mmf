@@ -17,7 +17,7 @@ type File struct {
 
 // Open opens the memory mapped file
 func Open(fileName string) (*File, error) {
-	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_SYNC|os.O_RDWR, 0700)
+	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0700)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,6 @@ func (f *File) mmap() error {
 
 	dh := (*reflect.SliceHeader)(unsafe.Pointer(&mmap))
 	dh.Len = int(stat.Size())
-	dh.Cap = int(nc)
 
 	err = mmap.Advise(gommap.MADV_RANDOM)
 	if err != nil {
@@ -91,8 +90,6 @@ func newCapacity(min int64) (int64, error) {
 // Append appends the data at the end of the file and extens the boundaries of the mmap
 func (f *File) Append(data []byte) error {
 
-	// shouldMMAP := len(f.MMap) == 0
-
 	n, err := f.f.Write(data)
 
 	if err != nil {
@@ -102,7 +99,7 @@ func (f *File) Append(data []byte) error {
 	newLength := len(f.MMap) + n
 
 	if newLength > cap(f.MMap) {
-		err := f.MMap.UnsafeUnmap()
+		err = f.MMap.UnsafeUnmap()
 		if err != nil {
 			return err
 		}
