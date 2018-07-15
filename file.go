@@ -1,6 +1,7 @@
 package mmf
 
 import (
+	"errors"
 	"os"
 	"reflect"
 	"unsafe"
@@ -21,42 +22,76 @@ func Open(fileName string) (*File, error) {
 		return nil, err
 	}
 
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-
 	file := &File{
 		f: f,
 	}
 
-	if stat.Size() != 0 {
-		err = file.mmap()
-		if err != nil {
-			return nil, err
-		}
+	err = file.mmap()
+	if err != nil {
+		return nil, err
 	}
 
 	return file, nil
 }
 
 func (f *File) mmap() error {
-	mmap, err := gommap.Map(f.f.Fd(), gommap.PROT_READ, gommap.MAP_SHARED)
+	stat, err := f.f.Stat()
 	if err != nil {
 		return err
 	}
+
+	nc, err := newCapacity(stat.Size())
+	if err != nil {
+		return err
+	}
+
+	mmap, err := gommap.MapAt(0, f.f.Fd(), 0, nc, gommap.PROT_READ, gommap.MAP_SHARED)
+	if err != nil {
+		return err
+	}
+
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&mmap))
+	dh.Len = int(stat.Size())
+	dh.Cap = int(nc)
+
 	err = mmap.Advise(gommap.MADV_RANDOM)
 	if err != nil {
 		return err
 	}
+
 	f.MMap = mmap
 	return nil
+}
+
+// for 64bit linux
+const maxMapSize = 0xFFFFFFFFFFFF
+
+const maxMMAPStep = 1 << 30
+
+func newCapacity(min int64) (int64, error) {
+	if min < 1<<10 {
+		return 1 << 10, nil
+	}
+	for i := uint(10); i <= 30; i++ {
+		if min <= 1<<i {
+			return 1 << i, nil
+		}
+	}
+
+	numPages := maxMMAPStep/uint64(min) + 1
+
+	size := numPages * maxMMAPStep
+	if size > maxMapSize {
+		return 0, errors.New("Too large mmap")
+	}
+
+	return int64(size), nil
 }
 
 // Append appends the data at the end of the file and extens the boundaries of the mmap
 func (f *File) Append(data []byte) error {
 
-	shouldMMAP := len(f.MMap) == 0
+	// shouldMMAP := len(f.MMap) == 0
 
 	n, err := f.f.Write(data)
 
@@ -66,14 +101,24 @@ func (f *File) Append(data []byte) error {
 
 	newLength := len(f.MMap) + n
 
+	if newLength > cap(f.MMap) {
+		err := f.MMap.UnsafeUnmap()
+		if err != nil {
+			return err
+		}
+
+		f.MMap = nil
+
+		err = f.mmap()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
 	// really uggly, but not to be avoided :(
 	dh := (*reflect.SliceHeader)(unsafe.Pointer(&f.MMap))
 	dh.Len = newLength
-	dh.Cap = newLength
-
-	if shouldMMAP {
-		err = f.mmap()
-	}
 
 	return err
 
