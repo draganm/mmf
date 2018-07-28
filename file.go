@@ -99,12 +99,14 @@ func (f *File) Append(data []byte) error {
 	newLength := len(f.MMap) + n
 
 	if newLength > cap(f.MMap) {
-		err = f.MMap.UnsafeUnmap()
-		if err != nil {
-			return err
-		}
+		if len(f.MMap) > 0 {
+			err = f.MMap.UnsafeUnmap()
+			if err != nil {
+				return err
+			}
 
-		f.MMap = nil
+			f.MMap = nil
+		}
 
 		err = f.mmap()
 		if err != nil {
