@@ -77,7 +77,7 @@ func newCapacity(min int64) (int64, error) {
 		}
 	}
 
-	numPages := maxMMAPStep/uint64(min) + 1
+	numPages := uint64(min)/maxMMAPStep + 1
 
 	size := numPages * maxMMAPStep
 	if size > maxMapSize {
