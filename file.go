@@ -4,15 +4,15 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"syscall"
 	"unsafe"
-
-	"github.com/tysontate/gommap"
 )
 
 // File represents state of the memory mapped file
 type File struct {
-	f    *os.File
-	MMap gommap.MMap
+	f            *os.File
+	MMap         []byte
+	originalData uintptr
 }
 
 // Open opens the memory mapped file
@@ -23,7 +23,8 @@ func Open(fileName string) (*File, error) {
 	}
 
 	file := &File{
-		f: f,
+		f:    f,
+		MMap: []byte{},
 	}
 
 	err = file.mmap()
@@ -33,6 +34,34 @@ func Open(fileName string) (*File, error) {
 
 	return file, nil
 }
+
+const (
+	PROT_NONE  uint = 0x0
+	PROT_READ  uint = 0x1
+	PROT_WRITE uint = 0x2
+	PROT_EXEC  uint = 0x4
+
+	MAP_SHARED    uint = 0x1
+	MAP_PRIVATE   uint = 0x2
+	MAP_FIXED     uint = 0x10
+	MAP_ANONYMOUS uint = 0x20
+	MAP_GROWSDOWN uint = 0x100
+	MAP_LOCKED    uint = 0x2000
+	MAP_NONBLOCK  uint = 0x10000
+	MAP_NORESERVE uint = 0x4000
+	MAP_POPULATE  uint = 0x8000
+
+	MADV_NORMAL     uint = 0x0
+	MADV_RANDOM     uint = 0x1
+	MADV_SEQUENTIAL uint = 0x2
+	MADV_WILLNEED   uint = 0x3
+	MADV_DONTNEED   uint = 0x4
+	MADV_REMOVE     uint = 0x9
+	MADV_DONTFORK   uint = 0xa
+	MADV_DOFORK     uint = 0xb
+
+	MREMAP_MAYMOVE uint = 0x1
+)
 
 func (f *File) mmap() error {
 	stat, err := f.f.Stat()
@@ -45,25 +74,34 @@ func (f *File) mmap() error {
 		return err
 	}
 
-	mmap, err := gommap.MapAt(0, f.f.Fd(), 0, nc, gommap.PROT_READ, gommap.MAP_SHARED)
-	if err != nil {
+	addr, err := mmap_syscall(uintptr(int64(0)), uintptr(nc), uintptr(PROT_READ), uintptr(MAP_SHARED), f.f.Fd(), 0)
+	if err != syscall.Errno(0) {
 		return err
 	}
 
-	dh := (*reflect.SliceHeader)(unsafe.Pointer(&mmap))
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&(f.MMap)))
+
+	f.originalData = dh.Data
+	dh.Data = addr
+
 	dh.Len = int(stat.Size())
+	dh.Cap = int(nc)
 
-	err = mmap.Advise(gommap.MADV_RANDOM)
-	if err != nil {
+	_, _, err = syscall.Syscall(syscall.SYS_MADVISE, uintptr(dh.Data), uintptr(dh.Len), uintptr(MADV_RANDOM))
+	if err != syscall.Errno(0) {
 		return err
 	}
 
-	f.MMap = mmap
 	return nil
 }
 
+func mmap_syscall(addr, length, prot, flags, fd uintptr, offset int64) (uintptr, error) {
+	addr, _, err := syscall.Syscall6(syscall.SYS_MMAP, addr, length, prot, flags, fd, uintptr(offset))
+	return addr, err
+}
+
 // for 64bit linux
-const maxMapSize = 0xFFFFFFFFFFFF
+const maxMapSize = 0xFFFFFFFFFFFFFFFF
 
 const maxMMAPStep = 1 << 30
 
@@ -99,19 +137,25 @@ func (f *File) Append(data []byte) error {
 	newLength := len(f.MMap) + n
 
 	if newLength > cap(f.MMap) {
-		if len(f.MMap) > 0 {
-			err = f.MMap.UnsafeUnmap()
-			if err != nil {
-				return err
-			}
 
-			f.MMap = nil
-		}
+		dh := (*reflect.SliceHeader)(unsafe.Pointer(&(f.MMap)))
 
-		err = f.mmap()
+		// MREMAP_MAYMOVE
+
+		var nc int64
+		nc, err = newCapacity(int64(newLength))
 		if err != nil {
 			return err
 		}
+
+		addr, _, err := syscall.Syscall6(syscall.SYS_MREMAP, uintptr(dh.Data), uintptr(dh.Len), uintptr(nc), uintptr(MREMAP_MAYMOVE), uintptr(0), uintptr(0))
+		if err != syscall.Errno(0) {
+			return err
+		}
+
+		dh.Data = addr
+		dh.Cap = int(nc)
+		dh.Len = newLength
 		return nil
 	}
 
@@ -126,16 +170,20 @@ func (f *File) Append(data []byte) error {
 // Close closes unmmaps and closes the file
 func (f *File) Close() error {
 
-	if len(f.MMap) > 0 {
-		err := f.MMap.UnsafeUnmap()
-		if err != nil {
-			return err
-		}
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&(f.MMap)))
+
+	_, _, err := syscall.Syscall(syscall.SYS_MUNMAP, uintptr(dh.Data), uintptr(dh.Cap), uintptr(0))
+	if err != syscall.Errno(0) {
+		return err
 	}
 
-	err := f.f.Close()
-	if err != nil {
-		return err
+	dh.Data = f.originalData
+	dh.Cap = 0
+	dh.Len = 0
+
+	e := f.f.Close()
+	if e != nil {
+		return e
 	}
 
 	f.f = nil
@@ -145,20 +193,13 @@ func (f *File) Close() error {
 }
 
 func (f *File) Empty() error {
-	if len(f.MMap) == 0 {
-		return nil
-	}
-
-	err := f.MMap.UnsafeUnmap()
+	err := f.f.Truncate(0)
 	if err != nil {
 		return err
 	}
 
-	err = f.f.Truncate(0)
-	if err != nil {
-		return err
-	}
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&(f.MMap)))
+	dh.Len = 0
 
-	f.MMap = nil
 	return nil
 }
